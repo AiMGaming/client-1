@@ -202,67 +202,72 @@ type PukFinder interface {
 	SeedByGeneration(m libkb.MetaContext, generation keybase1.PerUserKeyGeneration) (libkb.PerUserKeySeed, error)
 }
 
+type AccountPukGens map[stellar1.AccountID](keybase1.PerUserKeyGeneration)
+
 // DecodeAndUnbox decodes the encrypted and visible encoded bundles and unboxes
-// the encrypted bundle using PukFinder to find the correct puk.  It combines
-// the results into a stellar1.AccountBundle.
-func DecodeAndUnbox(m libkb.MetaContext, finder PukFinder, encodedBundle BundleEncoded) (*stellar1.Bundle, stellar1.BundleVersion, keybase1.PerUserKeyGeneration, error) {
+// the encrypted bundle using PukFinder to find the correct puk. It combines
+// the results into a stellar1.Bundle and also returns additional information
+// about the bundle: its version, pukGen, and the pukGens of each of the
+// decrypted account secrets.
+func DecodeAndUnbox(m libkb.MetaContext, finder PukFinder, encodedBundle BundleEncoded) (*stellar1.Bundle, stellar1.BundleVersion, keybase1.PerUserKeyGeneration, AccountPukGens, error) {
+	accountPukGens := make(AccountPukGens)
 	encBundle, hash, err := decodeParent(encodedBundle.EncParent)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, accountPukGens, err
 	}
 
 	puk, err := finder.SeedByGeneration(m, encBundle.Gen)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, accountPukGens, err
 	}
 
 	parent, parentVersion, err := unboxParent(encBundle, hash, encodedBundle.VisParent, puk)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, accountPukGens, err
 	}
 	parent.AccountBundles = make(map[stellar1.AccountID]stellar1.AccountBundle)
 	for _, parentEntry := range parent.Accounts {
 		if acctEncB64, ok := encodedBundle.AcctBundles[parentEntry.AccountID]; ok {
-			acctBundle, err := decodeAndUnboxAcctBundle(m, finder, acctEncB64, parentEntry)
+			acctBundle, acctGen, err := decodeAndUnboxAcctBundle(m, finder, acctEncB64, parentEntry)
+			accountPukGens[parentEntry.AccountID] = acctGen
 			if err != nil {
-				return nil, 0, 0, err
+				return nil, 0, 0, accountPukGens, err
 			}
 			if acctBundle == nil {
-				return nil, 0, 0, fmt.Errorf("error unboxing account bundle: missing for account %s", parentEntry.AccountID)
+				return nil, 0, 0, accountPukGens, fmt.Errorf("error unboxing account bundle: missing for account %s", parentEntry.AccountID)
 			}
 
 			parent.AccountBundles[parentEntry.AccountID] = *acctBundle
 		}
 	}
 	if err = parent.CheckInvariants(); err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, accountPukGens, err
 	}
-	return parent, parentVersion, encBundle.Gen, nil
+	return parent, parentVersion, encBundle.Gen, accountPukGens, nil
 }
 
-func decodeAndUnboxAcctBundle(m libkb.MetaContext, finder PukFinder, encB64 string, parentEntry stellar1.BundleEntry) (*stellar1.AccountBundle, error) {
+func decodeAndUnboxAcctBundle(m libkb.MetaContext, finder PukFinder, encB64 string, parentEntry stellar1.BundleEntry) (*stellar1.AccountBundle, keybase1.PerUserKeyGeneration, error) {
 	eab, hash, err := decode(encB64)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if !libkb.SecureByteArrayEq(hash, parentEntry.EncAcctBundleHash) {
-		return nil, errors.New("account bundle and parent entry hash mismatch")
+		return nil, 0, errors.New("account bundle and parent entry hash mismatch")
 	}
 
 	puk, err := finder.SeedByGeneration(m, eab.Gen)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ab, _, err := unbox(eab, hash, puk)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if ab.AccountID != parentEntry.AccountID {
-		return nil, errors.New("account bundle and parent entry account ID mismatch")
+		return nil, 0, errors.New("account bundle and parent entry account ID mismatch")
 	}
-
-	return ab, nil
+	return ab, eab.Gen, nil
 }
 
 // accountEncrypt encrypts the stellar account key bundle for the PUK.

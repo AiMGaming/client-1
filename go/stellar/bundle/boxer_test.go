@@ -50,7 +50,7 @@ func TestBundleRoundtrip(t *testing.T) {
 	require.True(t, len(boxed.EncParent.E) > 100)
 	require.Equal(t, pukGen, boxed.EncParent.Gen)
 
-	bundle2, version, decodedPukGen, err := DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
+	bundle2, version, decodedPukGen, accountGens, err := DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
 	require.NoError(t, err)
 	require.Equal(t, v2, version)
 	require.Equal(t, pukGen, decodedPukGen)
@@ -70,6 +70,7 @@ func TestBundleRoundtrip(t *testing.T) {
 		require.Equal(t, signers1, signers2)
 		require.True(t, len(signers2) == 1) // exactly one signer
 		require.True(t, len(signers2[0]) > 0)
+		require.Equal(t, keybase1.PerUserKeyGeneration(1), accountGens[acct.AccountID])
 	}
 }
 
@@ -82,7 +83,7 @@ func TestBundlePrevs(t *testing.T) {
 	// encode and decode b1 to populate OwnHash
 	b1Boxed, err := BoxAndEncode(&b1, pukGen, pukSeed)
 	require.NoError(t, err)
-	b1Decoded, _, _, err := DecodeAndUnbox(m, ring, b1Boxed.toBundleEncodedB64())
+	b1Decoded, _, _, _, err := DecodeAndUnbox(m, ring, b1Boxed.toBundleEncodedB64())
 	require.NoError(t, err)
 
 	// make a change, and verify hashes are correct
@@ -93,7 +94,7 @@ func TestBundlePrevs(t *testing.T) {
 	b2.Revision++
 	b2Boxed, err := BoxAndEncode(&b2, pukGen, pukSeed)
 	require.NoError(t, err)
-	b2Decoded, _, _, err := DecodeAndUnbox(m, ring, b2Boxed.toBundleEncodedB64())
+	b2Decoded, _, _, _, err := DecodeAndUnbox(m, ring, b2Boxed.toBundleEncodedB64())
 	require.NoError(t, err)
 	require.Equal(t, "apples", b2Decoded.Accounts[0].Name, "change carried thru")
 	require.NotNil(t, b2Decoded.Prev)
@@ -108,11 +109,15 @@ func TestBundlePrevs(t *testing.T) {
 	b3.Revision++
 	b3Boxed, err := BoxAndEncode(&b3, pukGen, pukSeed)
 	require.NoError(t, err)
-	b3Decoded, _, _, err := DecodeAndUnbox(m, ring, b3Boxed.toBundleEncodedB64())
+	b3Decoded, _, bundleGen, accountGens, err := DecodeAndUnbox(m, ring, b3Boxed.toBundleEncodedB64())
 	require.NoError(t, err)
 	require.Equal(t, "bananas", b3Decoded.Accounts[0].Name, "change carried thru")
 	require.NotNil(t, b3Decoded.Prev)
 	require.Equal(t, b3Decoded.Prev, b2Decoded.OwnHash, "b3 prevs to b2")
+	require.Equal(t, keybase1.PerUserKeyGeneration(2), bundleGen)
+	for _, acct := range b3Decoded.Accounts {
+		require.Equal(t, keybase1.PerUserKeyGeneration(2), accountGens[acct.AccountID])
+	}
 }
 
 func TestBundleRoundtripCorruptionEnc(t *testing.T) {
@@ -129,7 +134,7 @@ func TestBundleRoundtripCorruptionEnc(t *testing.T) {
 	}
 	boxed.EncParentB64 = boxed.EncParentB64[:85] + replaceWith + boxed.EncParentB64[86:]
 
-	_, _, _, err = DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
+	_, _, _, _, err = DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "stellar bundle secret box open failed")
 }
@@ -148,7 +153,7 @@ func TestBundleRoundtripCorruptionVis(t *testing.T) {
 	}
 	boxed.VisParentB64 = boxed.VisParentB64[:85] + replaceWith + boxed.VisParentB64[86:]
 
-	_, _, _, err = DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
+	_, _, _, _, err = DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "visible hash mismatch")
 }
@@ -348,7 +353,7 @@ func TestCanningFacility(t *testing.T) {
 		benc.AcctBundles[acctID] = encodedAcct.EncB64
 	}
 	m := libkb.NewMetaContext(context.Background(), nil)
-	decodedBundle, _, _, err := DecodeAndUnbox(m, ring, benc)
+	decodedBundle, _, _, _, err := DecodeAndUnbox(m, ring, benc)
 	t.Logf("decoded: %+v, err: %v", decodedBundle, err)
 }
 
@@ -361,7 +366,7 @@ func TestCanned(t *testing.T) {
 
 	// valid can
 	c := cans[0]
-	bundle, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
+	bundle, _, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
 	require.NoError(t, err)
 	require.Equal(t, "yJwcMuMxwpFuxt0A+7zYT2iev/1wVB5OeNdJzDSlBDo=", toB64(bundle.OwnHash))
 	// hashes match for the first account
@@ -385,7 +390,7 @@ func TestCantOpenWithTheWrongKey(t *testing.T) {
 			pukGen: pukSeed,
 		},
 	}
-	_, _, _, err := DecodeAndUnbox(m, ring, c.toBundleEncodedB64())
+	_, _, _, _, err := DecodeAndUnbox(m, ring, c.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "secret box open failed")
 }
@@ -394,7 +399,7 @@ func TestCannedUnboxInvariantViolationMultiplePrimary(t *testing.T) {
 	m := libkb.NewMetaContext(context.Background(), nil)
 
 	c := cans[2]
-	_, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
+	_, _, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "multiple primary accounts")
 }
@@ -403,7 +408,7 @@ func TestCannedCryptV1(t *testing.T) {
 	m := libkb.NewMetaContext(context.Background(), nil)
 
 	c := cans[3]
-	_, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
+	_, _, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "stellar secret bundle encryption version 1 has been retired")
 }
@@ -412,7 +417,7 @@ func TestCannedBundleHashMismatch(t *testing.T) {
 	m := libkb.NewMetaContext(context.Background(), nil)
 
 	c := cans[4]
-	_, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
+	_, _, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "corrupted bundle: visible hash mismatch")
 }
@@ -421,7 +426,7 @@ func TestCannedAccountHashMismatch(t *testing.T) {
 	m := libkb.NewMetaContext(context.Background(), nil)
 
 	c := cans[5]
-	_, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
+	_, _, _, _, err := DecodeAndUnbox(m, c.ring(t), c.toBundleEncodedB64())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "account bundle and parent entry hash mismatch")
 }
@@ -448,7 +453,7 @@ func TestBoxAccountBundle(t *testing.T) {
 	require.Len(t, boxed.AcctBundles, 1)
 
 	m := libkb.NewMetaContext(context.Background(), nil)
-	bundle, version, pukGen, err := DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
+	bundle, version, pukGen, accountGens, err := DecodeAndUnbox(m, ring, boxed.toBundleEncodedB64())
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
 	require.Equal(t, stellar1.BundleVersion_V2, version)
@@ -460,6 +465,9 @@ func TestBoxAccountBundle(t *testing.T) {
 	acctBundleOriginal, ok := b.AccountBundles[bundle.Accounts[0].AccountID]
 	require.True(t, ok)
 	require.Equal(t, acctBundle.Signers[0], acctBundleOriginal.Signers[0])
+	for _, acct := range bundle.Accounts {
+		require.Equal(t, keybase1.PerUserKeyGeneration(1), accountGens[acct.AccountID])
+	}
 }
 
 // pukRing is a convenience type for puks in these tests.

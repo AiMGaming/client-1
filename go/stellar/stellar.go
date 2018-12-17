@@ -131,10 +131,21 @@ func CreateWalletSoft(ctx context.Context, g *libkb.GlobalContext) {
 	_, err = CreateWalletGated(ctx, g)
 }
 
+func pushSimpleUpdateForAccount(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) (err error) {
+	defer g.CTraceTimed(ctx, "Stellar.Upkeep pushSimpleUpdateForAccount", func() error { return err })()
+	prevBundle, _, err := remote.FetchAccountBundle(ctx, g, accountID)
+	if err != nil {
+		return err
+	}
+	nextBundle := bundle.AdvanceAccounts(*prevBundle, []stellar1.AccountID{accountID})
+	return remote.Post(ctx, g, nextBundle)
+}
+
 // Upkeep makes sure the bundle is encrypted for the user's latest PUK.
 func Upkeep(ctx context.Context, g *libkb.GlobalContext) (err error) {
 	defer g.CTraceTimed(ctx, "Stellar.Upkeep", func() error { return err })()
-	prevBundle, prevPukGen, err := remote.FetchWholeBundle(ctx, g)
+
+	_, _, prevAccountPukGens, err := remote.FetchBundleWithGens(ctx, g)
 	if err != nil {
 		return err
 	}
@@ -147,12 +158,14 @@ func Upkeep(ctx context.Context, g *libkb.GlobalContext) (err error) {
 		return err
 	}
 	pukGen := pukring.CurrentGeneration()
-	if pukGen <= prevPukGen {
-		g.Log.CDebugf(ctx, "Stellar.Upkeep: early out prevPukGen:%v < pukGen:%v", prevPukGen, pukGen)
-		return nil
+	for accountID, accountPukGen := range prevAccountPukGens {
+		if accountPukGen <= pukGen {
+			if err = pushSimpleUpdateForAccount(ctx, g, accountID); err != nil {
+				return err
+			}
+		}
 	}
-	nextBundle := bundle.AdvanceAll(*prevBundle)
-	return remote.Post(ctx, g, nextBundle)
+	return nil
 }
 
 func ImportSecretKey(ctx context.Context, g *libkb.GlobalContext, secretKey stellar1.SecretKey, makePrimary bool, accountName string) (err error) {

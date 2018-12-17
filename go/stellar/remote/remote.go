@@ -172,8 +172,10 @@ func Post(ctx context.Context, g *libkb.GlobalContext, clearBundle stellar1.Bund
 	return err
 }
 
-func fetchBundleForAccount(ctx context.Context, g *libkb.GlobalContext, accountID *stellar1.AccountID) (b *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, err error) {
+func fetchBundleForAccount(ctx context.Context, g *libkb.GlobalContext, accountID *stellar1.AccountID) (
+	b *stellar1.Bundle, bv stellar1.BundleVersion, pukGen keybase1.PerUserKeyGeneration, accountGens bundle.AccountPukGens, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.fetchBundleForAccount", func() error { return err })()
+	m := libkb.NewMetaContext(ctx, g)
 
 	fetchArgs := libkb.HTTPArgs{}
 	if accountID != nil {
@@ -188,13 +190,12 @@ func fetchBundleForAccount(ctx context.Context, g *libkb.GlobalContext, accountI
 		InitialTimeout: 10 * time.Second,
 	}
 	var apiRes fetchAcctRes
-	if err = g.API.GetDecode(apiArg, &apiRes); err != nil {
-		return nil, 0, err
+	if err := g.API.GetDecode(apiArg, &apiRes); err != nil {
+		return nil, 0, 0, accountGens, err
 	}
-	m := libkb.NewMetaContext(ctx, g)
+
 	finder := &pukFinder{}
-	b, _, pukGen, err = bundle.DecodeAndUnbox(m, finder, apiRes.BundleEncoded)
-	return b, pukGen, err
+	return bundle.DecodeAndUnbox(m, finder, apiRes.BundleEncoded)
 }
 
 // FetchSecretlessBundle gets an account bundle from the server and decrypts it
@@ -204,7 +205,8 @@ func fetchBundleForAccount(ctx context.Context, g *libkb.GlobalContext, accountI
 func FetchSecretlessBundle(ctx context.Context, g *libkb.GlobalContext) (bundle *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.FetchSecretlessBundle", func() error { return err })()
 
-	return fetchBundleForAccount(ctx, g, nil)
+	bundle, _, pukGen, _, err = fetchBundleForAccount(ctx, g, nil)
+	return bundle, pukGen, err
 }
 
 // FetchAccountBundle gets a bundle from the server with all of the accounts
@@ -215,7 +217,42 @@ func FetchSecretlessBundle(ctx context.Context, g *libkb.GlobalContext) (bundle 
 func FetchAccountBundle(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) (bundle *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.FetchAccountBundle", func() error { return err })()
 
-	return fetchBundleForAccount(ctx, g, &accountID)
+	bundle, _, pukGen, _, err = fetchBundleForAccount(ctx, g, &accountID)
+	return bundle, pukGen, err
+}
+
+// FetchBundleWithGens gets a bundle with all of the secrets in it for which this device
+// has access, i.e. if there are no mobile-only accounts, this bundle will have all of
+// the secrets. Also returned is a map of accountID -> pukGen. Entries are only in the
+// map for accounts with secrets in the bundle.
+// This is probably only useful for stellar.Upkeep after a PUK rotation.
+func FetchBundleWithGens(ctx context.Context, g *libkb.GlobalContext) (b *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, accountGens bundle.AccountPukGens, err error) {
+	defer g.CTraceTimed(ctx, "Stellar.FetchBundleWithGens", func() error { return err })()
+
+	b, _, pukGen, _, err = fetchBundleForAccount(ctx, g, nil) // this bundle no account secrets
+	if err != nil {
+		return nil, 0, bundle.AccountPukGens{}, err
+	}
+	accountGens = make(bundle.AccountPukGens)
+	newAccBundles := make(map[stellar1.AccountID]stellar1.AccountBundle)
+	for _, acct := range b.Accounts {
+		singleBundle, _, _, singleAccountGens, err := fetchBundleForAccount(ctx, g, &acct.AccountID)
+		if err != nil {
+			// expected errors include SCStellarDeviceNotMobile, SCStellarMobileOnlyPurgatory
+			g.Log.CDebugf(ctx, "unable to pull secrets for account %v which is not necessarily a problem %v", acct.AccountID, err)
+			continue
+		}
+		accBundle := singleBundle.AccountBundles[acct.AccountID]
+		newAccBundles[acct.AccountID] = accBundle
+		accountGens[acct.AccountID] = singleAccountGens[acct.AccountID]
+	}
+	b.AccountBundles = newAccBundles
+	err = b.CheckInvariants()
+	if err != nil {
+		return nil, 0, bundle.AccountPukGens{}, err
+	}
+
+	return b, pukGen, accountGens, nil
 }
 
 // FetchWholeBundle gets the secretless bundle and loops through the accountIDs

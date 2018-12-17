@@ -124,43 +124,70 @@ func setupWithNewBundle(t *testing.T, tc *TestContext) {
 	acceptDisclaimer(tc)
 }
 
+func assertCorrectPukGens(t *testing.T, m libkb.MetaContext, expectedPukGen keybase1.PerUserKeyGeneration) {
+	bundle, parentPukGen, accountPukGens, err := remote.FetchBundleWithGens(m.Ctx(), m.G())
+	require.NoError(t, err)
+	require.Equal(t, expectedPukGen, parentPukGen)
+	for _, acct := range bundle.Accounts {
+		acctPukGen := accountPukGens[acct.AccountID]
+		require.Equal(t, expectedPukGen, acctPukGen)
+	}
+}
+
+func rotatePuk(t *testing.T, m libkb.MetaContext) {
+	engArg := &engine.PerUserKeyRollArgs{}
+	eng := engine.NewPerUserKeyRoll(m.G(), engArg)
+	err := engine.RunEngine2(m, eng)
+	require.NoError(t, err)
+	require.True(t, eng.DidNewKey)
+}
+
 func TestUpkeep(t *testing.T) {
 	tcs, cleanup := setupNTests(t, 1)
+	srv := tcs[0].Srv
 	defer cleanup()
 	ctx := context.Background()
 	g := tcs[0].G
+	m := libkb.NewMetaContext(ctx, g)
+	// create a wallet with two accounts
 	setupWithNewBundle(t, tcs[0])
-
-	bundle, pukGen, err := remote.FetchSecretlessBundle(ctx, g)
+	a1, s1 := randomStellarKeypair()
+	argS1 := stellar1.ImportSecretKeyLocalArg{
+		SecretKey:   s1,
+		MakePrimary: false,
+		Name:        "qq",
+	}
+	err := srv.ImportSecretKeyLocal(ctx, argS1)
 	require.NoError(t, err)
-	originalID := bundle.OwnHash
-	require.NotNil(t, originalID)
-	originalPukGen := pukGen
+	// verify that the pukGen is 1 everywhere
+	assertCorrectPukGens(t, m, keybase1.PerUserKeyGeneration(1))
 
+	// call Upkeep. Nothing should change because no keys were rotated.
 	err = stellar.Upkeep(ctx, g)
 	require.NoError(t, err)
+	assertCorrectPukGens(t, m, keybase1.PerUserKeyGeneration(1))
 
-	bundle, pukGen, err = remote.FetchSecretlessBundle(ctx, g)
-	require.NoError(t, err)
-	require.Equal(t, bundle.OwnHash, originalID, "bundle should be unchanged by no-op upkeep")
-	require.Equal(t, originalPukGen, pukGen)
-
-	t.Logf("rotate puk")
-	engArg := &engine.PerUserKeyRollArgs{}
-	eng := engine.NewPerUserKeyRoll(g, engArg)
-	m := libkb.NewMetaContextTODO(g)
-	err = engine.RunEngine2(m, eng)
-	require.NoError(t, err)
-	require.True(t, eng.DidNewKey)
-
+	// rotate the puk and verify that Upkeep bumps the generation.
+	rotatePuk(t, m)
 	err = stellar.Upkeep(ctx, g)
 	require.NoError(t, err)
+	assertCorrectPukGens(t, m, keybase1.PerUserKeyGeneration(2))
 
-	bundle, pukGen, err = remote.FetchSecretlessBundle(ctx, g)
+	// verify that Upkeep can run on just a single account by rotating the
+	// puk, pushing an unrelated update to one account (this will implicitly
+	// do the generation bump on just that account as well as the parent bundle
+	// but not on unrelated accounts) and then calling Upkeep. The untouched
+	// account should also get updated to the generation of the parent bundle
+	// and the other account.
+	rotatePuk(t, m)
+	prevBundle, _, err := remote.FetchAccountBundle(ctx, g, a1)
 	require.NoError(t, err)
-	require.NotEqual(t, bundle.OwnHash, originalID, "bundle should be new")
-	require.NotEqual(t, originalPukGen, pukGen, "bundle should be for new puk")
-	require.Equal(t, 2, int(bundle.Revision))
+	nextBundle := bundle.AdvanceAccounts(*prevBundle, []stellar1.AccountID{a1})
+	err = remote.Post(ctx, g, nextBundle)
+	require.NoError(t, err)
+	err = stellar.Upkeep(ctx, g)
+	require.NoError(t, err)
+	assertCorrectPukGens(t, m, keybase1.PerUserKeyGeneration(3))
 }
 
 func TestImportExport(t *testing.T) {
