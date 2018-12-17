@@ -33,12 +33,24 @@ const Header = (props: HeaderProps) => (
         </Kb.Text>
       )}
     </Kb.Box2>
-    <Kb.BackButton
-      onClick={props.onBack}
-      style={styles.backButton}
-      iconColor={Styles.globalColors.white}
-      textStyle={styles.backButtonText}
-    />
+    {Styles.isMobile && (
+      <Kb.Text
+        onClick={props.onBack}
+        style={styles.backButton}
+        textStyle={styles.backButtonText}
+        type="Header"
+      >
+        Cancel
+      </Kb.Text>
+    )}
+    {!Styles.isMobile && (
+      <Kb.BackButton
+        onClick={props.onBack}
+        style={styles.backButton}
+        iconColor={Styles.globalColors.white}
+        textStyle={styles.backButtonText}
+      />
+    )}
   </Kb.Box2>
 )
 
@@ -52,7 +64,9 @@ const styles = Styles.styleSheetCreate({
       top: Styles.globalMargins.small,
     },
     isMobile: {
-      left: Styles.globalMargins.xtiny,
+      color: Styles.globalColors.white,
+      left: 12,
+      top: 12,
     },
   }),
   backButtonText: {

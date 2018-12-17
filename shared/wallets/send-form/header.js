@@ -12,7 +12,19 @@ const Header = (props: Props) => (
       style={Styles.collapseStyles([styles.header, props.whiteBackground && styles.whiteBackground])}
       fullWidth={true}
     >
-      {props.onBack && <Kb.BackButton style={styles.backButton} onClick={props.onBack} />}
+      {props.onBack &&
+        (Styles.isMobile ? (
+          <Kb.Text
+            style={styles.backButton}
+            type="Header"
+            onClick={props.onBack}
+            textStyle={styles.backButtonText}
+          >
+            Cancel
+          </Kb.Text>
+        ) : (
+          <Kb.BackButton style={styles.backButton} onClick={props.onBack} />
+        ))}
       <Kb.Icon
         type={Styles.isMobile ? 'icon-stellar-coins-flying-2-48' : 'icon-stellar-coins-flying-48'}
         style={Kb.iconCastPlatformStyles(styles.icon)}
@@ -31,9 +43,14 @@ const styles = Styles.styleSheetCreate({
       top: 18,
     },
     isMobile: {
-      left: 4,
+      color: Styles.globalColors.white,
+      left: 12,
+      top: 12,
     },
   }),
+  backButtonText: {
+    color: Styles.globalColors.white,
+  },
   header: Styles.platformStyles({
     common: {
       alignSelf: 'flex-end',
