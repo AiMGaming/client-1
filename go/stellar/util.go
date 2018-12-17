@@ -71,7 +71,7 @@ func (c *ownAccountLookupCacheImpl) fetch(mctx libkb.MetaContext) {
 	go func() {
 		ctx := libkb.CopyTagsToBackground(mctx.Ctx())
 		defer c.Unlock()
-		bundle, _, err := remote.FetchSecretlessBundle(ctx, mctx.G())
+		bundle, err := remote.FetchSecretlessBundle(ctx, mctx.G())
 		c.loadErr = err
 		if err != nil {
 			return

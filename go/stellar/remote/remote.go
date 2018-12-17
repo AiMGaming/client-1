@@ -200,32 +200,34 @@ func fetchBundleForAccount(ctx context.Context, g *libkb.GlobalContext, accountI
 
 // FetchSecretlessBundle gets an account bundle from the server and decrypts it
 // but without any specified AccountID and therefore no secrets (signers).
-// This method is safe to call by any of a user's devices even if one or more of
-// the accounts is marked as being mobile only.
-func FetchSecretlessBundle(ctx context.Context, g *libkb.GlobalContext) (bundle *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, err error) {
+// This method is safe to be called by any of a user's devices even if one or more of
+// the accounts is marked as mobile only.
+func FetchSecretlessBundle(ctx context.Context, g *libkb.GlobalContext) (bundle *stellar1.Bundle, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.FetchSecretlessBundle", func() error { return err })()
 
-	bundle, _, pukGen, _, err = fetchBundleForAccount(ctx, g, nil)
-	return bundle, pukGen, err
+	bundle, _, _, _, err = fetchBundleForAccount(ctx, g, nil)
+	return bundle, err
 }
 
 // FetchAccountBundle gets a bundle from the server with all of the accounts
-// in it, but it will only have the secrets for specified accountID.
+// in it, but it will only have the secrets for the specified accountID.
 // This method will bubble up an error if it's called by a Desktop device for
 // an account that is mobile only. If you don't need the secrets, use
 // FetchSecretlessBundle instead.
-func FetchAccountBundle(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) (bundle *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, err error) {
+func FetchAccountBundle(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) (bundle *stellar1.Bundle, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.FetchAccountBundle", func() error { return err })()
 
-	bundle, _, pukGen, _, err = fetchBundleForAccount(ctx, g, &accountID)
-	return bundle, pukGen, err
+	bundle, _, _, _, err = fetchBundleForAccount(ctx, g, &accountID)
+	return bundle, err
 }
 
-// FetchBundleWithGens gets a bundle with all of the secrets in it for which this device
-// has access, i.e. if there are no mobile-only accounts, this bundle will have all of
-// the secrets. Also returned is a map of accountID -> pukGen. Entries are only in the
-// map for accounts with secrets in the bundle.
-// This is probably only useful for stellar.Upkeep after a PUK rotation.
+// FetchBundleWithGens gets a bundle with all of the secrets in it to which this device
+// has access, i.e. if there are no mobile-only accounts, then this bundle will have
+// all of the secrets. Also returned is a map of accountID->pukGen. Entries are only in the
+// map for accounts with secrets in the bundle. Inaccessible accounts will be in the
+// visible part of the parent bundle but not in the AccountBundle secrets nor in the
+// AccountPukGens map. FetchBundleWithGens is only for very specific usecases.
+// FetchAccountBundle and FetchSecretlessBundle are the preferred ways to pull a bundle.
 func FetchBundleWithGens(ctx context.Context, g *libkb.GlobalContext) (b *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, accountGens bundle.AccountPukGens, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.FetchBundleWithGens", func() error { return err })()
 
@@ -258,25 +260,28 @@ func FetchBundleWithGens(ctx context.Context, g *libkb.GlobalContext) (b *stella
 // FetchWholeBundle gets the secretless bundle and loops through the accountIDs
 // to get the signers for each of them and build a single, full bundle with all
 // of the information. This will error from any device that does not have access
-// to all of the accounts (e.g. a desktop after mobile-only)
-func FetchWholeBundle(ctx context.Context, g *libkb.GlobalContext) (bundle *stellar1.Bundle, pukGen keybase1.PerUserKeyGeneration, err error) {
+// to all of the accounts (e.g. a desktop after mobile-only). This is only used
+// in tests.
+func FetchWholeBundle(ctx context.Context, g *libkb.GlobalContext) (bundle *stellar1.Bundle, err error) {
 	defer g.CTraceTimed(ctx, "Stellar.FetchWholeBundle", func() error { return err })()
-
-	bundle, pukGen, err = FetchSecretlessBundle(ctx, g)
+	if g.Env.GetRunMode() == libkb.ProductionRunMode {
+		return nil, errors.New("FetchWholeBundle is only for test and dev")
+	}
+	bundle, err = FetchSecretlessBundle(ctx, g)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	newAccBundles := make(map[stellar1.AccountID]stellar1.AccountBundle)
 	for _, acct := range bundle.Accounts {
-		singleBundle, _, err := FetchAccountBundle(ctx, g, acct.AccountID)
+		singleBundle, err := FetchAccountBundle(ctx, g, acct.AccountID)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		accBundle := singleBundle.AccountBundles[acct.AccountID]
 		newAccBundles[acct.AccountID] = accBundle
 	}
 	bundle.AccountBundles = newAccBundles
-	return bundle, pukGen, nil
+	return bundle, nil
 }
 
 func getLatestPuk(ctx context.Context, g *libkb.GlobalContext) (pukGen keybase1.PerUserKeyGeneration, pukSeed libkb.PerUserKeySeed, err error) {
@@ -752,7 +757,7 @@ func MarkAsRead(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.
 }
 
 func IsAccountMobileOnly(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) (bool, error) {
-	bundle, _, err := FetchSecretlessBundle(ctx, g)
+	bundle, err := FetchSecretlessBundle(ctx, g)
 	if err != nil {
 		return false, err
 	}
@@ -771,7 +776,7 @@ func IsAccountMobileOnly(ctx context.Context, g *libkb.GlobalContext, accountID 
 // SetAccountMobileOnly will fetch the account bundle and flip the mobile-only switch,
 // then send the new account bundle revision to the server.
 func SetAccountMobileOnly(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) error {
-	b, _, err := FetchAccountBundle(ctx, g, accountID)
+	b, err := FetchAccountBundle(ctx, g, accountID)
 	if err != nil {
 		return err
 	}
@@ -796,7 +801,7 @@ func SetAccountMobileOnly(ctx context.Context, g *libkb.GlobalContext, accountID
 // (so that any device can get the account secret keys) then send the new account bundle
 // to the server.
 func MakeAccountAllDevices(ctx context.Context, g *libkb.GlobalContext, accountID stellar1.AccountID) error {
-	b, _, err := FetchAccountBundle(ctx, g, accountID)
+	b, err := FetchAccountBundle(ctx, g, accountID)
 	if err != nil {
 		return err
 	}

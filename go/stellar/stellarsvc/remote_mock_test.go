@@ -993,7 +993,7 @@ func (r *BackendMock) addAccountByID(accountID stellar1.AccountID, funded bool) 
 func (r *BackendMock) ImportAccountsForUser(tc *TestContext) (res []*FakeAccount) {
 	defer tc.G.CTraceTimed(context.Background(), "BackendMock.ImportAccountsForUser", func() error { return nil })()
 	r.Lock()
-	bundle, _, err := remote.FetchWholeBundle(context.Background(), tc.G)
+	bundle, err := remote.FetchWholeBundle(context.Background(), tc.G)
 	require.NoError(r.T, err)
 	for _, account := range bundle.Accounts {
 		if _, found := r.accounts[account.AccountID]; found {

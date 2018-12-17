@@ -339,7 +339,7 @@ func TestSetAccountAsDefault(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	bundle, _, err := remote.FetchSecretlessBundle(context.Background(), tcs[0].G)
+	bundle, err := remote.FetchSecretlessBundle(context.Background(), tcs[0].G)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, bundle.Revision)
 
