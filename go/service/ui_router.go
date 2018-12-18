@@ -96,13 +96,21 @@ func (u *UIRouter) GetIdentifyUI() (libkb.IdentifyUI, error) {
 	return ret, nil
 }
 
-func (u *UIRouter) GetIdentify3UIAdapter(m libkb.MetaContext, id keybase1.Identify3GUIID) (libkb.IdentifyUI, error) {
+func (u *UIRouter) GetIdentify3UIClient(m libkb.MetaContext) (keybase1.Identify3UiClient, error) {
 	x, _ := u.getUI(libkb.Identify3UIKind)
 	if x == nil {
-		return nil, nil
+		return keybase1.Identify3UiClient{}, nil
 	}
 	cli := rpc.NewClient(x, libkb.NewContextifiedErrorUnwrapper(m.G()), nil)
 	id3cli := keybase1.Identify3UiClient{Cli: cli}
+	return id3cli, nil
+}
+
+func (u *UIRouter) GetIdentify3UIAdapter(m libkb.MetaContext, id keybase1.Identify3GUIID) (libkb.IdentifyUI, error) {
+	id3cli, err := u.GetIdentify3UIClient(m)
+	if err != nil {
+		return nil, err
+	}
 	return NewIdentify3UIAdapter(m, id3cli, u.id3state)
 }
 

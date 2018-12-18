@@ -51,15 +51,9 @@ protocol identify3Ui {
     Identify3RowColor color        // 'blue' | 'red' | 'black' | 'green',
   ) oneway;
 
-  void identify3UpdateDetails(
+  void identify3UpdateUserCard(
     Identify3GUIID guiID,          // id used to tie these things together
-    boolean followsYou,
-    boolean followThem,
-    int followersCount,
-    int followingCount,
-    string bio,
-    string location,
-    array<string> publishedTeams
+    UserCard card
   ) oneway;
 
   void identify3TrackerTimedOut(

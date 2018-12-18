@@ -109,42 +109,15 @@
       "oneway": true,
       "lint": "ignore"
     },
-    "identify3UpdateDetails": {
+    "identify3UpdateUserCard": {
       "request": [
         {
           "name": "guiID",
           "type": "Identify3GUIID"
         },
         {
-          "name": "followsYou",
-          "type": "boolean"
-        },
-        {
-          "name": "followThem",
-          "type": "boolean"
-        },
-        {
-          "name": "followersCount",
-          "type": "int"
-        },
-        {
-          "name": "followingCount",
-          "type": "int"
-        },
-        {
-          "name": "bio",
-          "type": "string"
-        },
-        {
-          "name": "location",
-          "type": "string"
-        },
-        {
-          "name": "publishedTeams",
-          "type": {
-            "type": "array",
-            "items": "string"
-          }
+          "name": "card",
+          "type": "UserCard"
         }
       ],
       "response": null,

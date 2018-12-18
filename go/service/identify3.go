@@ -9,7 +9,6 @@ import (
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 	"github.com/keybase/go-framed-msgpack-rpc/rpc"
 	"golang.org/x/net/context"
-	"stathat.com/c/ramcache"
 	"sync"
 	"time"
 )
@@ -61,25 +60,76 @@ type identify3Handler struct {
 type identify3State struct {
 	sync.Mutex
 
+	expireCh chan<- struct{}
+
 	// Table of keybase1.Identify3GUIID -> *identify3Session's
-	cache *ramcache.Ramcache
+	cache           map[keybase1.Identify3GUIID](*identify3Session)
+	expirationQueue [](*identify3Session)
 }
 
 func newIdentify3State(g *libkb.GlobalContext) *identify3State {
-	ret := &identify3State{}
+	ch := make(chan struct{})
+	ret := &identify3State{
+		expireCh: ch,
+		cache:    make(map[keybase1.Identify3GUIID](*identify3Session)),
+	}
 	ret.makeNewCache()
+	go ret.runExpireThread(g, ch)
 	return ret
+}
+
+func (s *identify3State) Shutdown() {
+	close(s.expireCh)
 }
 
 func (s *identify3State) makeNewCache() {
 	s.Lock()
-	defer s.Unlock()
-	if s.cache != nil {
-		s.cache.Shutdown()
+	s.cache = make(map[keybase1.Identify3GUIID](*identify3Session))
+	s.expirationQueue = nil
+	s.Unlock()
+	s.expireCh <- struct{}{}
+}
+
+func (s *identify3State) runExpireThread(g *libkb.GlobalContext, ch <-chan struct{}) {
+
+	m := libkb.NewMetaContextBackground(g)
+	wait := time.Hour
+
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				m.CDebugf("identify3State#runExpireThread: exiting on shutdown")
+				break
+			}
+		case <-g.Clock().After(wait):
+
+		}
+		wait = s.expireSessions(m)
 	}
-	cache := ramcache.New()
-	cache.MaxAge = 24 * time.Hour
-	s.cache = cache
+}
+
+func (s *identify3Session) expire(m libkb.MetaContext) {
+
+}
+
+func (s *identify3State) expireSessions(m libkb.MetaContext) time.Duration {
+	s.Lock()
+	defer s.Unlock()
+
+	for {
+
+		if len(s.expirationQueue) == 0 {
+			return time.Hour
+		}
+		first := s.expirationQueue[0]
+		expireAt := first.created.Add(24 * time.Hour)
+		diff := m.G().Clock().Now().Sub(expireAt)
+		if diff > 0 {
+			return diff
+		}
+		first.expire(m)
+	}
 }
 
 // get an identify3Session out of the cache, as keyed by a Identify3GUIID. Return
@@ -94,18 +144,10 @@ func (s *identify3State) get(key keybase1.Identify3GUIID) (ret *identify3Session
 }
 
 func (s *identify3State) getLocked(key keybase1.Identify3GUIID) (ret *identify3Session, unlocker func(), err error) {
-	v, err := s.cache.Get(string(key))
+	outcome, found := s.cache[key]
 	unlocker = func() {}
-	if err != nil {
-		// NotFound isn't an error case
-		if err == ramcache.ErrNotFound {
-			return nil, unlocker, nil
-		}
-		return nil, unlocker, err
-	}
-	outcome, ok := v.(*identify3Session)
-	if !ok {
-		return nil, unlocker, fmt.Errorf("invalid type in cache: %T", v)
+	if !found {
+		return nil, unlocker, nil
 	}
 	outcome.Lock()
 	unlocker = func() { outcome.Unlock() }
@@ -125,7 +167,9 @@ func (s *identify3State) put(sess *identify3Session) error {
 		unlocker()
 		return libkb.ExistsError{Msg: "Identify3 ID already exists"}
 	}
-	return s.cache.Set(string(sess.id), sess)
+	s.cache[sess.id] = sess
+	s.expirationQueue = append(s.expirationQueue, sess)
+	return nil
 }
 
 func (s *identify3State) Reset(mctx libkb.MetaContext) {
