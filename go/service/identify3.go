@@ -294,30 +294,38 @@ func NewIdentify3UIAdapterWithSession(mctx libkb.MetaContext, cli keybase1.Ident
 func (i *Identify3UIAdapter) Start(string, keybase1.IdentifyReason, bool) error {
 	return nil
 }
+
 func (i *Identify3UIAdapter) FinishWebProofCheck(keybase1.RemoteProof, keybase1.LinkCheckResult) error {
 	return unimplemented()
 }
+
 func (i *Identify3UIAdapter) FinishSocialProofCheck(keybase1.RemoteProof, keybase1.LinkCheckResult) error {
 	return unimplemented()
 }
+
 func (i *Identify3UIAdapter) Confirm(*keybase1.IdentifyOutcome) (keybase1.ConfirmResult, error) {
 	return keybase1.ConfirmResult{}, unimplemented()
 }
+
 func (i *Identify3UIAdapter) DisplayCryptocurrency(keybase1.Cryptocurrency) error {
 	return unimplemented()
 }
+
 func (i *Identify3UIAdapter) DisplayKey(keybase1.IdentifyKey) error {
 	return unimplemented()
 }
+
 func (i *Identify3UIAdapter) ReportLastTrack(track *keybase1.TrackSummary) error {
 	if track != nil {
 		i.meFollowsThem = true
 	}
 	return nil
 }
+
 func (i *Identify3UIAdapter) LaunchNetworkChecks(*keybase1.Identity, *keybase1.User) error {
 	return unimplemented()
 }
+
 func (i *Identify3UIAdapter) DisplayTrackStatement(string) error {
 	return unimplemented()
 }
