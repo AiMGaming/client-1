@@ -96,7 +96,7 @@ func (u *UIRouter) GetIdentifyUI() (libkb.IdentifyUI, error) {
 	return ret, nil
 }
 
-func (u *UIRouter) GetIdentify3UIClient(m libkb.MetaContext) (keybase1.Identify3UiClient, error) {
+func (u *UIRouter) getIdentify3UIClient(m libkb.MetaContext) (keybase1.Identify3UiClient, error) {
 	x, _ := u.getUI(libkb.Identify3UIKind)
 	if x == nil {
 		return keybase1.Identify3UiClient{}, nil
@@ -106,8 +106,12 @@ func (u *UIRouter) GetIdentify3UIClient(m libkb.MetaContext) (keybase1.Identify3
 	return id3cli, nil
 }
 
+func (u *UIRouter) GetIdentify3UI(m libkb.MetaContext) (keybase1.Identify3UiInterface, error) {
+	return u.getIdentify3UIClient(m)
+}
+
 func (u *UIRouter) GetIdentify3UIAdapter(m libkb.MetaContext, id keybase1.Identify3GUIID) (libkb.IdentifyUI, error) {
-	id3cli, err := u.GetIdentify3UIClient(m)
+	id3cli, err := u.getIdentify3UIClient(m)
 	if err != nil {
 		return nil, err
 	}

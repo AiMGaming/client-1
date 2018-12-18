@@ -75,19 +75,19 @@ func newIdentify3State(g *libkb.GlobalContext) *identify3State {
 	}
 	ret.makeNewCache()
 	go ret.runExpireThread(g, ch)
+	g.PushShutdownHook(func() error {
+		close(ch)
+		return nil
+	})
 	return ret
-}
-
-func (s *identify3State) Shutdown() {
-	close(s.expireCh)
 }
 
 func (s *identify3State) makeNewCache() {
 	s.Lock()
+	defer s.Unlock()
 	s.cache = make(map[keybase1.Identify3GUIID](*identify3Session))
 	s.expirationQueue = nil
-	s.Unlock()
-	s.expireCh <- struct{}{}
+	s.pokeExpireThread()
 }
 
 func (s *identify3State) runExpireThread(g *libkb.GlobalContext, ch <-chan struct{}) {
@@ -110,7 +110,15 @@ func (s *identify3State) runExpireThread(g *libkb.GlobalContext, ch <-chan struc
 }
 
 func (s *identify3Session) expire(m libkb.MetaContext) {
-
+	cli, err := m.G().UIRouter.GetIdentify3UI(m)
+	if err != nil {
+		m.CWarningf("failed to get an electron UI to expire %s: %s", s.id, err)
+		return
+	}
+	err = cli.Identify3TrackerTimedOut(m.Ctx(), s.id)
+	if err != nil {
+		m.CWarningf("error timing ID3 session %s: %s", s.id, err)
+	}
 }
 
 func (s *identify3State) expireSessions(m libkb.MetaContext) time.Duration {
@@ -118,18 +126,28 @@ func (s *identify3State) expireSessions(m libkb.MetaContext) time.Duration {
 	defer s.Unlock()
 
 	for {
-
 		if len(s.expirationQueue) == 0 {
 			return time.Hour
 		}
-		first := s.expirationQueue[0]
-		expireAt := first.created.Add(24 * time.Hour)
-		diff := m.G().Clock().Now().Sub(expireAt)
+		diff := s.expireSession(m, s.expirationQueue[0])
 		if diff > 0 {
 			return diff
 		}
-		first.expire(m)
 	}
+}
+
+func (s *identify3State) expireSession(m libkb.MetaContext, sess *identify3Session) time.Duration {
+	sess.Lock()
+	defer sess.Unlock()
+	expireAt := sess.created.Add(24 * time.Hour)
+	diff := expireAt.Sub(m.G().Clock().Now())
+	if diff > 0 {
+		return diff
+	}
+	sess.expire(m)
+	s.expirationQueue = s.expirationQueue[1:]
+	delete(s.cache, sess.id)
+	return diff
 }
 
 // get an identify3Session out of the cache, as keyed by a Identify3GUIID. Return
@@ -164,12 +182,22 @@ func (s *identify3State) put(sess *identify3Session) error {
 		return err
 	}
 	if tmp != nil {
-		unlocker()
 		return libkb.ExistsError{Msg: "Identify3 ID already exists"}
 	}
 	s.cache[sess.id] = sess
 	s.expirationQueue = append(s.expirationQueue, sess)
+	s.pokeExpireThread()
 	return nil
+}
+
+// pokeExpireThread tells the background expire thread to wakeup and maybe change its sleeping
+// habits. We do this in a go routine since sometimes we call pokeExpireThread while holding
+// the lock around s, which the expire thread also grabs, so we don't want to cause a situation
+// where they are deadlocked.
+func (s *identify3State) pokeExpireThread() {
+	go func() {
+		s.expireCh <- struct{}{}
+	}()
 }
 
 func (s *identify3State) Reset(mctx libkb.MetaContext) {
@@ -232,8 +260,11 @@ func (i *identify3Handler) Identify3IgnoreUser(context.Context, keybase1.Identif
 // Identify3UI interface that the frontend is soon to implement. It's going to maintain the
 // state machine that was previously implemented in JS.
 type Identify3UIAdapter struct {
-	state   *identify3State
-	session *identify3Session
+	libkb.MetaContextified
+	state         *identify3State
+	session       *identify3Session
+	cli           keybase1.Identify3UiClient
+	meFollowsThem bool
 }
 
 var _ libkb.IdentifyUI = (*Identify3UIAdapter)(nil)
@@ -244,7 +275,9 @@ func unimplemented() error {
 
 func NewIdentify3UIAdapter(mctx libkb.MetaContext, cli keybase1.Identify3UiClient, state *identify3State) (*Identify3UIAdapter, error) {
 	ret := &Identify3UIAdapter{
-		state: state,
+		MetaContextified: libkb.NewMetaContextified(mctx),
+		state:            state,
+		cli:              cli,
 	}
 	return ret, nil
 }
@@ -259,7 +292,7 @@ func NewIdentify3UIAdapterWithSession(mctx libkb.MetaContext, cli keybase1.Ident
 }
 
 func (i *Identify3UIAdapter) Start(string, keybase1.IdentifyReason, bool) error {
-	return unimplemented()
+	return nil
 }
 func (i *Identify3UIAdapter) FinishWebProofCheck(keybase1.RemoteProof, keybase1.LinkCheckResult) error {
 	return unimplemented()
@@ -276,8 +309,11 @@ func (i *Identify3UIAdapter) DisplayCryptocurrency(keybase1.Cryptocurrency) erro
 func (i *Identify3UIAdapter) DisplayKey(keybase1.IdentifyKey) error {
 	return unimplemented()
 }
-func (i *Identify3UIAdapter) ReportLastTrack(*keybase1.TrackSummary) error {
-	return unimplemented()
+func (i *Identify3UIAdapter) ReportLastTrack(track *keybase1.TrackSummary) error {
+	if track != nil {
+		i.meFollowsThem = true
+	}
+	return nil
 }
 func (i *Identify3UIAdapter) LaunchNetworkChecks(*keybase1.Identity, *keybase1.User) error {
 	return unimplemented()
@@ -285,9 +321,25 @@ func (i *Identify3UIAdapter) LaunchNetworkChecks(*keybase1.Identity, *keybase1.U
 func (i *Identify3UIAdapter) DisplayTrackStatement(string) error {
 	return unimplemented()
 }
-func (i *Identify3UIAdapter) DisplayUserCard(keybase1.UserCard) error {
-	return unimplemented()
+
+func (i *Identify3UIAdapter) DisplayUserCard(card keybase1.UserCard) error {
+
+	// Do not take the server's word on this! Overwrite with what we got above.
+	// Depends on the fact this gets called after ReportLastTrack, which is currently
+	// the case.
+	card.YouFollowThem = i.meFollowsThem
+
+	arg := keybase1.Identify3UpdateUserCardArg{
+		GuiID: i.session.id,
+		Card:  card,
+	}
+	err := i.cli.Identify3UpdateUserCard(i.M().Ctx(), arg)
+	if err != nil {
+		i.M().CDebugf("Failed to send update card: %s", err)
+	}
+	return nil
 }
+
 func (i *Identify3UIAdapter) ReportTrackToken(keybase1.TrackToken) error {
 	return unimplemented()
 }
