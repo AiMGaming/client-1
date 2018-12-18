@@ -261,10 +261,10 @@ func (i *identify3Handler) Identify3IgnoreUser(context.Context, keybase1.Identif
 // state machine that was previously implemented in JS.
 type Identify3UIAdapter struct {
 	libkb.MetaContextified
-	state         *identify3State
-	session       *identify3Session
-	cli           keybase1.Identify3UiClient
-	meFollowsThem bool
+	state       *identify3State
+	session     *identify3Session
+	cli         keybase1.Identify3UiClient
+	iFollowThem bool
 }
 
 var _ libkb.IdentifyUI = (*Identify3UIAdapter)(nil)
@@ -327,7 +327,7 @@ func (i *Identify3UIAdapter) DisplayUserCard(card keybase1.UserCard) error {
 	// Do not take the server's word on this! Overwrite with what we got above.
 	// Depends on the fact this gets called after ReportLastTrack, which is currently
 	// the case.
-	card.YouFollowThem = i.meFollowsThem
+	card.YouFollowThem = i.iFollowThem
 
 	arg := keybase1.Identify3UpdateUserCardArg{
 		GuiID: i.session.id,
