@@ -7,6 +7,7 @@ import {makeRouteDefNode, makeLeafTags} from '../route-tree'
 import SecurityPrefs from './common/security-prefs-container'
 import DestinationPicker from './destination-picker/container'
 import SendLinkToChat from './send-link-to-chat/container'
+import OopsNoAccess from './oops-no-access/container'
 
 /* TODO: update examples here
  * Example Fs routes:
@@ -86,6 +87,11 @@ const _commonChildren = {
   },
   sendLinkToChat: {
     component: SendLinkToChat,
+    tags: makeLeafTags({
+      layerOnTop: !isMobile,
+      renderTopmostOnly: !isMobile,
+      title: 'Send link to chat',
+    }),
   },
 }
 
@@ -102,6 +108,15 @@ const _mainRoute = {
         }),
       }),
     main: () => makeRouteDefNode(_mainRoute),
+    oopsNoAccess: () =>
+      makeRouteDefNode({
+        component: OopsNoAccess,
+        tags: makeLeafTags({
+          layerOnTop: !isMobile,
+          renderTopmostOnly: !isMobile,
+          title: 'Permission error',
+        }),
+      }),
     /* TODO delete
     preview: () =>
       makeRouteDefNode({
